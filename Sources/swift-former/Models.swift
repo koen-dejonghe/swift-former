@@ -1,5 +1,9 @@
 import TensorFlow
 import Foundation
+import TensorFlow
+import Python
+
+let np = Python.import("numpy")
 
 struct SelfAttentionWide: Layer {
     typealias Input = Tensor<Float>
@@ -7,13 +11,13 @@ struct SelfAttentionWide: Layer {
 
     @noDerivative let emb: Int
     @noDerivative let heads: Int
-    @noDerivative let mask: Int
+    @noDerivative let mask: Bool
     var toKeys: Linear<Float>
     var toQueries: Linear<Float>
     var toValues: Linear<Float>
     var unifyHeads: Dense<Float>
 
-    init(emb: Int, heads: Int, mask: Int) {
+    init(emb: Int, heads: Int, mask: Bool) {
 	self.emb = emb
 	self.heads = heads
 	self.mask = mask
@@ -69,7 +73,7 @@ struct TransformerBlock: Layer {
 
     @noDerivative let emb: Int
     @noDerivative let heads: Int
-    @noDerivative let mask: Int
+    @noDerivative let mask: Bool
     @noDerivative let seqLength: Int
     @noDerivative let ffHiddenMult: Int
     @noDerivative let dropout: Double
@@ -81,7 +85,7 @@ struct TransformerBlock: Layer {
     var ff: Sequential<Dense<Float>,Dense<Float>>
     var drpt: Dropout<Float>
 
-    init(emb: Int, heads: Int, mask: Int, seqLength: Int, ffHiddenMult: Int = 4, dropout: Double = 0.0, wide: Bool = true) {
+    init(emb: Int, heads: Int, mask: Bool, seqLength: Int, ffHiddenMult: Int = 4, dropout: Double = 0.0, wide: Bool = true) {
 
 	self.emb = emb
 	self.heads = heads
@@ -116,6 +120,19 @@ struct TransformerBlock: Layer {
     }
 }
 
+// copied from fast ai
+extension Array: Module where Element: Layer, Element.Input == Element.Output {
+    public typealias Input = Element.Input
+    public typealias Output = Element.Output
+
+    @differentiable(wrt: (self, input))
+    public func callAsFunction(_ input: Input) -> Output {
+          return self.differentiableReduce(input) { $1($0) }
+    }
+}
+extension Array: Layer where Element: Layer, Element.Input == Element.Output {}
+
+
 struct GTransformer: Layer {
     typealias Input = Tensor<Float>
     typealias Output = Tensor<Float>
@@ -130,6 +147,7 @@ struct GTransformer: Layer {
     var tokenEmbedding: Embedding<Float>
     var posEmbedding: Embedding<Float>
     var toProbs: Dense<Float>
+    var tblocks: Array<TransformerBlock>
 
     init(emb: Int, heads: Int, depth: Int, seqLength: Int, numTokens: Int, wide: Bool = false) {
 	self.emb = emb
@@ -142,12 +160,35 @@ struct GTransformer: Layer {
 	tokenEmbedding = Embedding<Float>(vocabularySize: emb, embeddingSize: numTokens)
 	posEmbedding = Embedding<Float>(vocabularySize: emb, embeddingSize: seqLength)
 
+	tblocks = (1 ... depth).map { _ in
+	    TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:seqLength, wide:wide)
+	}
+
 	toProbs = Dense<Float>(inputSize: emb, outputSize: numTokens)
 
     }
 
     @differentiable
     func callAsFunction(_ x: Input) -> Output {
-	return x.sequenced(through: [toProbs, toProbs])
+	let tokens = tokenEmbedding(Tensor<Int32>(x))
+	print("tokens.shape: \(tokens.shape)")
+	let b = tokens.shape[0]
+	let t = tokens.shape[1]
+	let e = tokens.shape[2]
+
+	let a = np.arange(t, dtype:"int32")
+	let p = Tensor<Int32>(numpy: a)!
+	let positions = posEmbedding(p).expandingShape(at:0).broadcasted(to: [b, t, e])
+	print("positions.shape: \(positions.shape)")
+
+	print(positions)
+
+	// let x0 = tokens + positions
+	// let x1 = tblocks(x0)
+	// let x2 = toProbs(x1.reshaped(to: [b*t, e])).reshaped(to: [b, t, numTokens])
+
+	return positions
+	// return logSoftmax(x2)
+
     }
 }

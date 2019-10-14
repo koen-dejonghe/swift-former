@@ -4,7 +4,7 @@ import TensorFlow
 
 let emb = 4
 let heads = 3
-let mask = 1
+let mask = false
 
 let bs = 4
 
@@ -23,7 +23,7 @@ let 𝛁m1 = saw.gradient { classifier -> Tensor<Float> in
         //return loss
         return ŷ
 }
-print(𝛁m1)
+// print(𝛁m1)
 
 let seqLength = 8
 let ffHiddenMult = 4
@@ -38,12 +38,27 @@ let transformer = TransformerBlock(emb:emb,
 				   dropout:dropout, 
 				   wide:wide)
 
-let 𝛁m2 = transformer.gradient { classifier -> Tensor<Float> in
-        let ŷ = classifier(x).sum()
+let m2 = transformer.gradient { classifier -> Tensor<Float> in
+        let r = classifier(x).sum()
         //let loss = softmaxCrossEntropy(logits: ŷ, labels: y)
         //print("Loss: \(loss)")
         //return loss
-        return ŷ
+        return r
 }
-print(𝛁m2)
+// print(m2)
+
+
+
+let gt = GTransformer(emb: emb, heads: heads, depth: 12, seqLength: 256, numTokens: 256, wide: false) 
+
+let xg = Tensor<Float>(linearSpaceFrom: 0.0, to: 0.999, count: bs*seqLength)
+	 .reshaped(to: [bs, seqLength])
+
+
+let m3 = gt.gradient { classifier -> Tensor<Float> in
+        let r = classifier(xg).sum()
+        return r
+}
+print(m3)
+
 
