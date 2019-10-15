@@ -181,14 +181,15 @@ struct GTransformer: Layer {
 	let positions = posEmbedding(p).expandingShape(at:0).broadcasted(to: [b, t, e])
 	print("positions.shape: \(positions.shape)")
 
-	print(positions)
-
-	// let x0 = tokens + positions
-	// let x1 = tblocks(x0)
+	let x0 = tokens + positions
+	let x1 = tblocks(x0)
 	// let x2 = toProbs(x1.reshaped(to: [b*t, e])).reshaped(to: [b, t, numTokens])
 
-	return positions
 	// return logSoftmax(x2)
+
+	print(x1)
+
+	return x1
 
     }
 }
