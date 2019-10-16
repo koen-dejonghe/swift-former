@@ -96,8 +96,8 @@ struct TransformerBlock: Layer {
 	self.wide = wide
 
 	attention = SelfAttentionWide(emb: emb, heads: heads, mask: mask)
-	norm1 = LayerNorm<Float>(featureCount: emb, axis: 0, epsilon:  Tensor(1e-5))
-	norm2 = LayerNorm<Float>(featureCount: emb, axis: 0, epsilon:  Tensor(1e-5))
+	norm1 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon:  Tensor(1e-5))
+	norm2 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon:  Tensor(1e-5))
 
 	ff = Sequential(
 	    Dense<Float>(inputSize: emb, outputSize: ffHiddenMult * emb, activation: relu),
@@ -161,8 +161,7 @@ struct GTransformer: Layer {
 	posEmbedding = Embedding<Float>(vocabularySize: emb, embeddingSize: seqLength)
 
 	tblocks = (1 ... depth).map { d in
-	    print("tblocks depth: \(d)")
-	    return TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:seqLength, wide:wide)
+	    TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:seqLength, wide:wide)
 	}
 
 	toProbs = Dense<Float>(inputSize: emb, outputSize: numTokens)
