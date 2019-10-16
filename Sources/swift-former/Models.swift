@@ -160,8 +160,9 @@ struct GTransformer: Layer {
 	tokenEmbedding = Embedding<Float>(vocabularySize: emb, embeddingSize: numTokens)
 	posEmbedding = Embedding<Float>(vocabularySize: emb, embeddingSize: seqLength)
 
-	tblocks = (1 ... depth).map { _ in
-	    TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:seqLength, wide:wide)
+	tblocks = (1 ... depth).map { d in
+	    print("tblocks depth: \(d)")
+	    return TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:seqLength, wide:wide)
 	}
 
 	toProbs = Dense<Float>(inputSize: emb, outputSize: numTokens)

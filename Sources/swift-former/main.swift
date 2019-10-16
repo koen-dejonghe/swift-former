@@ -47,34 +47,54 @@ let m2 = transformer.gradient { classifier -> Tensor<Float> in
 }
 // print(m2)
 
-let tblocks = (1 ... 12).map { _ in
-    TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:256, wide:true)
+func testTBlocks() {
+
+    print("testing tblocks")
+
+    let bs = 32
+    let heads = 8
+    let emb = 128
+    let depth = 12
+    let context = 256
+    let numTokens = 256
+
+    let tblocks:Array<TransformerBlock> = (1 ... depth).map { d in
+	print("tblocks depth: \(d)")
+	return TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:context, wide:true)
+    }
+
+    let x = Tensor<Float>(randomNormal: [bs, context, emb])
+    let d = tblocks.gradient { classifier -> Tensor<Float> in
+	let r = classifier(x).sum()
+	return r
+    }
+    print(d)
+}
+testTBlocks()
+
+
+func testGT()
+{
+    print("testing gt")
+    let bs = 32
+    let heads = 8
+    let emb = 128
+    let depth = 12
+    let context = 256
+    let numTokens = 256
+
+    let gt = GTransformer(emb: emb, heads: heads, depth: depth, seqLength: context, numTokens: numTokens, wide: false) 
+
+    let x = Tensor<Float>(linearSpaceFrom: 0.0, to: 0.999, count: bs*context)
+	     .reshaped(to: [bs, context])
+
+    let m = gt.gradient { classifier -> Tensor<Float> in
+	    let r = classifier(x).sum()
+	    return r
+    }
+    print(m)
 }
 
-// let x3 = Tensor<Float>(randomNormal: [4, 8, 256])
-let d3 = tblocks.gradient { classifier -> Tensor<Float> in
-        let r = classifier(x).sum()
-        //let loss = softmaxCrossEntropy(logits: ŷ, labels: y)
-        //print("Loss: \(loss)")
-        //return loss
-        return r
-}
-print(d3)
-
-
-
-let gt = GTransformer(emb: emb, heads: heads, depth: 12, seqLength: 256, numTokens: 256, wide: false) 
-
-// let xg = Tensor<Float>(linearSpaceFrom: 0.0, to: 0.999, count: bs*seqLength)
-	 // .reshaped(to: [bs, seqLength])
-
-let xg = Tensor<Float>(linearSpaceFrom: 0.0, to: 0.999, count: bs*emb)
-	 .reshaped(to: [bs, emb])
-
-let m3 = gt.gradient { classifier -> Tensor<Float> in
-        let r = classifier(xg).sum()
-        return r
-}
-print(m3)
+testGT()
 
 
