@@ -1,9 +1,6 @@
 import TensorFlow
 import Foundation
 import TensorFlow
-import Python
-
-let np = Python.import("numpy")
 
 struct SelfAttentionWide: Layer {
     typealias Input = Tensor<Float>
@@ -34,8 +31,7 @@ struct SelfAttentionWide: Layer {
 	let e = x.shape[2]
 	let h = self.heads
 
-	// assert  is not differentiable
-	// assert(e == self.emb, "Input embedding \(e) should match layer embedding dim \(self.emb)")
+	precondition(e == self.emb, "Input embedding \(e) should match layer embedding dim \(self.emb)")
 
 	let keys = toKeys(x)
 	    .reshaped(to: [b, t, h, e])
@@ -53,8 +49,7 @@ struct SelfAttentionWide: Layer {
 
 	let dot = softmax(matmul(queries, keys), alongAxis: 2)
 
-	// assert  is not differentiable
-	// assert(dot.shape == [b*h, t, t])
+	precondition(dot.shape == [b*h, t, t])
 
 	// todo implement masking
 
@@ -96,8 +91,8 @@ struct TransformerBlock: Layer {
 	self.wide = wide
 
 	attention = SelfAttentionWide(emb: emb, heads: heads, mask: mask)
-	norm1 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon:  Tensor(1e-5))
-	norm2 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon:  Tensor(1e-5))
+	norm1 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon: Tensor(1e-5))
+	norm2 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon: Tensor(1e-5))
 
 	ff = Sequential(
 	    Dense<Float>(inputSize: emb, outputSize: ffHiddenMult * emb, activation: relu),
@@ -133,8 +128,8 @@ extension Array: Module where Element: Layer, Element.Input == Element.Output {
 extension Array: Layer where Element: Layer, Element.Input == Element.Output {}
 
 
-struct GTransformer: Layer {
-    typealias Input = Tensor<Float>
+struct GTransformer: Module {
+    typealias Input = Tensor<Int32>
     typealias Output = Tensor<Float>
 
     @noDerivative let emb: Int
@@ -157,39 +152,32 @@ struct GTransformer: Layer {
 	self.numTokens = numTokens
 	self.wide = wide
 
-	tokenEmbedding = Embedding<Float>(vocabularySize: emb, embeddingSize: numTokens)
-	posEmbedding = Embedding<Float>(vocabularySize: emb, embeddingSize: seqLength)
+	tokenEmbedding = Embedding<Float>(vocabularySize: numTokens, embeddingSize: emb)
+	posEmbedding = Embedding<Float>(vocabularySize: seqLength, embeddingSize: emb)
 
 	tblocks = (1 ... depth).map { d in
 	    TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:seqLength, wide:wide)
 	}
 
 	toProbs = Dense<Float>(inputSize: emb, outputSize: numTokens)
-
     }
 
-    @differentiable
+    @differentiable(wrt: self)
     func callAsFunction(_ x: Input) -> Output {
-	let tokens = tokenEmbedding(Tensor<Int32>(x))
+	let tokens = tokenEmbedding(x)
 	print("tokens.shape: \(tokens.shape)")
 	let b = tokens.shape[0]
 	let t = tokens.shape[1]
 	let e = tokens.shape[2]
 
-	let a = np.arange(t, dtype:"int32")
-	let p = Tensor<Int32>(numpy: a)!
+	let p = Tensor<Int32>(rangeFrom: Int32(0), to: Int32(t), stride: Int32(1))
 	let positions = posEmbedding(p).expandingShape(at:0).broadcasted(to: [b, t, e])
 	print("positions.shape: \(positions.shape)")
 
 	let x0 = tokens + positions
 	let x1 = tblocks(x0)
-	// let x2 = toProbs(x1.reshaped(to: [b*t, e])).reshaped(to: [b, t, numTokens])
+	let x2 = toProbs(x1.reshaped(to: [b*t, e])).reshaped(to: [b, t, numTokens])
 
-	// return logSoftmax(x2)
-
-	print(x1)
-
-	return x1
-
+	return logSoftmax(x2)
     }
 }

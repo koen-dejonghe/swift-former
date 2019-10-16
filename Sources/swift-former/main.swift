@@ -1,6 +1,7 @@
 print("Hello, world!")
 
 import TensorFlow
+import Python
 
 func testSaw() {
     let emb = 4
@@ -93,17 +94,72 @@ func testGT()
     let context = 256
     let numTokens = 256
 
-    let gt = GTransformer(emb:emb, heads:heads, depth:depth, seqLength:context, numTokens:numTokens, wide:false) 
-    // let x = Tensor<Float>(linearSpaceFrom: 0.0, to: 0.999, count: bs*context).reshaped(to: [bs, context])
-    let x = Tensor<Float>(randomNormal: [bs, context])
+    let gt = GTransformer(emb:emb, 
+			  heads:heads, 
+			  depth:depth, 
+			  seqLength:context, 
+			  numTokens:numTokens, 
+			  wide:false) 
+
+    let x = Tensor<Int32>(randomUniform: [bs, context], 
+			  lowerBound: Tensor<Int32>(0), 
+			  upperBound: Tensor<Int32>(Int32(numTokens)))
 
     let m = gt.gradient { classifier -> Tensor<Float> in
 	let r = classifier(x).sum()
 	return r
     }
-    print(m)
+    print(type(of: m))
+}
+// testGT()
+
+let np = Python.import("numpy")
+let gzip = Python.import("gzip")
+func enwik8(path: String, 
+	   nTrain: Int32 = Int32(90e6), 
+	   nValid: Int32 = Int32(5e6), 
+	   nTest: Int32 = Int32(5e6)) -> [Tensor<UInt8>] {
+    let file = gzip.open(path).read(nTrain + nValid + nTest)
+    let x = np.fromstring(file, dtype:"uint8")
+    let xt = Tensor<UInt8>(numpy: x)!
+    print(xt.shape)
+    let split = xt.split(sizes: Tensor<Int32>([nTrain, nValid, nTest]), alongAxis: 0)
+    print(split.count)
+    return split
 }
 
-testGT()
+
+func testLoad() {
+    let bs = 32
+    let heads = 8
+    let emb = 128
+    let depth = 12
+    let context = 256
+    let numTokens = 256
+    let lr: Float = 1e-4
+    let numBatches = 1000000
+
+    let data = enwik8(path:"data/enwik8.gz")
+    let dataTrain = data[0]
+    let model = GTransformer(emb:emb, 
+			  heads:heads, 
+			  depth:depth, 
+			  seqLength:context, 
+			  numTokens:numTokens, 
+			  wide:true) 
+
+    let opt = Adam(for: model, learningRate: lr)
+
+    for i in 0 ..< numBatches {
+	// starts = torch.randint(size=(arg.batch_size, ), low=0, high=data_train.size(0) - arg.context - 1)
+	let starts = Tensor<Int32>(
+	    randomUniform: [bs], 
+	    lowerBound: Tensor<Int32>(0), 
+	    upperBound: Tensor<Int32>(Int32(dataTrain.shape[0] - context - 1)))
+
+	dataTrain[0 ... 255]
+    }
+}
+testLoad()
 
 
