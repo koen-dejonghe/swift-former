@@ -174,8 +174,6 @@ func testLoad() {
             
             return output.sum()
         }
-        
-        
 
     }
 }
