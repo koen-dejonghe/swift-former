@@ -55,7 +55,7 @@ func testTf() {
 	    //return loss
 	    return r
     }
-    // print(m2)
+    print(m2)
 }
 
 func testTBlocks() {
@@ -157,7 +157,12 @@ func testLoad() {
 	    lowerBound: Tensor<Int32>(0), 
 	    upperBound: Tensor<Int32>(Int32(dataTrain.shape[0] - context - 1)))
 
-	dataTrain[0 ... 255]
+	// seqs_source = [data_train[start  :start+arg.context  ] for start in starts]
+	let seqSource: Array<Tensor<UInt8>> = (1 ... bs).map { i in 
+	    let range = Int(starts[i].scalarized()) ... Int(starts[i].scalarized()) + context
+	    return dataTrain[range]
+	}
+
     }
 }
 testLoad()
