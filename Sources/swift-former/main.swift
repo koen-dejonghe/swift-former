@@ -157,16 +157,17 @@ func testLoad() {
             lowerBound: Tensor<Int32>(0),
             upperBound: Tensor<Int32>(Int32(dataTrain.shape[0] - context - 1)))
 
-        let seqSource: Array<Tensor<UInt8>> = (1 ... bs).map { i in
-            let range = Int(starts[i].scalarized()) ... Int(starts[i].scalarized()) + context
+        let seqSource: Array<Tensor<UInt8>> = (0 ..< bs).map { i in
+            let range = Int(starts[i].scalarized()) ..< Int(starts[i].scalarized()) + context
             return dataTrain[range]
         }
-        let seqTarget: Array<Tensor<UInt8>> = (1 ... bs).map { i in
-            let range = Int(starts[i].scalarized()) + 1 ... Int(starts[i].scalarized()) + context + 1
+        let seqTarget: Array<Tensor<UInt8>> = (0 ..< bs).map { i in
+            let range = Int(starts[i].scalarized()) + 1 ..< Int(starts[i].scalarized()) + context + 1
             return dataTrain[range]
         }
-        let source = Tensor<Int32>(Tensor(concatenating: seqSource))
-        let target = Tensor<Int32>(Tensor(concatenating: seqTarget))
+
+        let source = Tensor<Int32>(Tensor(concatenating: seqSource)).reshaped(to:[bs, context])
+        let target = Tensor<Int32>(Tensor(concatenating: seqTarget)).reshaped(to:[bs, context])
 
         let m = model.gradient { generator -> Tensor<Float> in
             let output = generator(source)
