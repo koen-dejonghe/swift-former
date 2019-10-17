@@ -106,8 +106,8 @@ func testGT()
 			  upperBound: Tensor<Int32>(Int32(numTokens)))
 
     let m = gt.gradient { classifier -> Tensor<Float> in
-	let r = classifier(x).sum()
-	return r
+        let r = classifier(x).sum()
+        return r
     }
     print(type(of: m))
 }
@@ -150,18 +150,31 @@ func testLoad() {
 
     let opt = Adam(for: model, learningRate: lr)
 
-    for i in 0 ..< numBatches {
-	// starts = torch.randint(size=(arg.batch_size, ), low=0, high=data_train.size(0) - arg.context - 1)
-	let starts = Tensor<Int32>(
-	    randomUniform: [bs], 
-	    lowerBound: Tensor<Int32>(0), 
-	    upperBound: Tensor<Int32>(Int32(dataTrain.shape[0] - context - 1)))
+    for _ in 0 ..< numBatches {
+        // starts = torch.randint(size=(arg.batch_size, ), low=0, high=data_train.size(0) - arg.context - 1)
+        let starts = Tensor<Int32>(
+            randomUniform: [bs],
+            lowerBound: Tensor<Int32>(0),
+            upperBound: Tensor<Int32>(Int32(dataTrain.shape[0] - context - 1)))
 
-	// seqs_source = [data_train[start  :start+arg.context  ] for start in starts]
-	let seqSource: Array<Tensor<UInt8>> = (1 ... bs).map { i in 
-	    let range = Int(starts[i].scalarized()) ... Int(starts[i].scalarized()) + context
-	    return dataTrain[range]
-	}
+        let seqSource: Array<Tensor<UInt8>> = (1 ... bs).map { i in
+            let range = Int(starts[i].scalarized()) ... Int(starts[i].scalarized()) + context
+            return dataTrain[range]
+        }
+        let seqTarget: Array<Tensor<UInt8>> = (1 ... bs).map { i in
+            let range = Int(starts[i].scalarized()) + 1 ... Int(starts[i].scalarized()) + context + 1
+            return dataTrain[range]
+        }
+        let source = Tensor<Int32>(Tensor(concatenating: seqSource))
+        let target = Tensor<Int32>(Tensor(concatenating: seqTarget))
+
+        let m = model.gradient { generator -> Tensor<Float> in
+            let output = generator(source)
+            
+            return output.sum()
+        }
+        
+        
 
     }
 }
