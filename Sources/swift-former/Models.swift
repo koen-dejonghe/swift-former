@@ -165,19 +165,23 @@ struct GTransformer: Module {
     @differentiable(wrt: self)
     func callAsFunction(_ x: Input) -> Output {
 	let tokens = tokenEmbedding(x)
-	print("tokens.shape: \(tokens.shape)")
+	// print("tokens.shape: \(tokens.shape)")
 	let b = tokens.shape[0]
 	let t = tokens.shape[1]
 	let e = tokens.shape[2]
 
 	let p = Tensor<Int32>(rangeFrom: Int32(0), to: Int32(t), stride: Int32(1))
 	let positions = posEmbedding(p).expandingShape(at:0).broadcasted(to: [b, t, e])
-	print("positions.shape: \(positions.shape)")
+	// print("positions.shape: \(positions.shape)")
 
 	let x0 = tokens + positions
 	let x1 = tblocks(x0)
-	let x2 = toProbs(x1.reshaped(to: [b*t, e])).reshaped(to: [b, t, numTokens])
+	// in the pytorch implementation, we return a 3D tensor
+	// in s4tf, we need to reshape that back to a 2D one
+	// let x2 = toProbs(x1.reshaped(to: [b*t, e]))//.reshaped(to: [b, t, numTokens])
+	let x2 = toProbs(x1.reshaped(to: [b*t, e]))
 
-	return logSoftmax(x2)
+	return x2
+	// return logSoftmax(x2)
     }
 }

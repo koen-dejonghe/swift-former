@@ -128,6 +128,60 @@ func enwik8(path: String,
     return split
 }
 
+/*
+def nll_gaussian(y_pred_mean,y_pred_sd,y_test):
+
+    ## element wise square
+    square = tf.square(y_pred_mean - y_test)## preserve the same shape as y_pred.shape
+    ms = tf.add(tf.divide(square,y_pred_sd), tf.log(y_pred_sd))
+    ## axis = -1 means that we take mean across the last dimension 
+    ## the output keeps all but the last dimension
+    ## ms = tf.reduce_mean(ms,axis=-1)
+    ## return scalar
+    ms = tf.reduce_mean(ms)
+    return(ms)
+}
+*/
+
+/*
+ # dim == 3 or dim > 4
+n = input.size(0)
+c = input.size(1)
+out_size = (n,) + input.size()[2:]
+if target.size()[1:] != input.size()[2:]:
+    raise ValueError('Expected target size {}, got {}'.format( out_size, target.size()))
+input = input.contiguous().view(n, c, 1, -1)
+target = target.contiguous().view(n, 1, -1)
+reduction_enum = _Reduction.get_enum(reduction)
+if reduction != 'none':
+    ret = torch._C._nn.nll_loss2d(input, target, weight, reduction_enum, ignore_index)
+else:
+    out = torch._C._nn.nll_loss2d(input, target, weight, reduction_enum, ignore_index)
+    ret = out.view(out_size)
+*/
+
+/*
+def NLLLoss(logs, targets):
+    out = logs[range(len(targets)), targets]
+    return -out.sum()/len(out)
+*/
+
+/*
+func nllLoss(source: Tensor<Float>, target: Tensor<Int32>) -> Float {
+
+    let n = source.shape[0]
+    let c = source.shape[1]
+    let z = source.shape[2]
+
+    let s = source.reshaped(to: [n, c, 1, z])
+    let t = target.reshaped(to: [n, 1, z])
+
+    let out = s[0 ..< n, t]
+
+    return 0.0
+}
+*/
+
 
 func testLoad() {
     let bs = 32
@@ -141,17 +195,16 @@ func testLoad() {
 
     let data = enwik8(path:"data/enwik8.gz")
     let dataTrain = data[0]
-    let model = GTransformer(emb:emb, 
+    var model = GTransformer(emb:emb, 
 			  heads:heads, 
 			  depth:depth, 
 			  seqLength:context, 
 			  numTokens:numTokens, 
 			  wide:true) 
 
-    let opt = Adam(for: model, learningRate: lr)
+    let optimizer = Adam(for: model, learningRate: lr)
 
-    for _ in 0 ..< numBatches {
-        // starts = torch.randint(size=(arg.batch_size, ), low=0, high=data_train.size(0) - arg.context - 1)
+    for b in 0 ..< numBatches {
         let starts = Tensor<Int32>(
             randomUniform: [bs],
             lowerBound: Tensor<Int32>(0),
@@ -167,13 +220,18 @@ func testLoad() {
         }
 
         let source = Tensor<Int32>(Tensor(concatenating: seqSource)).reshaped(to:[bs, context])
-        let target = Tensor<Int32>(Tensor(concatenating: seqTarget)).reshaped(to:[bs, context])
+        let target = Tensor<Int32>(Tensor(concatenating: seqTarget)).reshaped(to:[bs*context])
 
-        let m = model.gradient { generator -> Tensor<Float> in
+        let (loss, grad) = model.valueWithGradient { generator -> Tensor<Float> in
             let output = generator(source)
-            
-            return output.sum()
+	    // print(output)
+	    let loss = softmaxCrossEntropy(logits: output, //.reshaped(to: [bs*context, -1]), 
+				           labels: target)
+	    print("batch \(b): \(loss)")
+	    return loss
         }
+
+	optimizer.update(&model.allDifferentiableVariables, along: grad)
 
     }
 }
