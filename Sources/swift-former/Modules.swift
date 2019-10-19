@@ -3,6 +3,74 @@ import Foundation
 import Python
 
 
+
+public struct Linear<Scalar: TensorFlowFloatingPoint>: Layer {
+    /// The weight matrix.
+    public var weight: Tensor<Scalar>
+    /// The bias vector.
+    public var bias: Tensor<Scalar>
+    /// The element-wise activation function.
+    @noDerivative public let activation: Activation
+    /// Indicates whether this is a batched dense layer.
+    @noDerivative internal let batched: Bool
+    /// Indicates whether to use bias or not.
+    @noDerivative public let useBias: Bool
+
+    /// The element-wise activation function type.
+    public typealias Activation = @differentiable (Tensor<Scalar>) -> Tensor<Scalar>
+
+    public init(
+        weight: Tensor<Scalar>,
+        bias: Tensor<Scalar>,
+        activation: @escaping Activation,
+        useBias: Bool = true
+    ) {
+        precondition(weight.rank <= 3, "The rank of the 'weight' tensor must be less than 4.")
+        precondition(bias.rank <= 2, "The rank of the 'bias' tensor must be less than 3.")
+        self.weight = weight
+        self.bias = bias
+        self.activation = activation
+        self.batched = weight.rank == 3
+        self.useBias = useBias
+    }
+
+    /// Returns the output obtained from applying the layer to the given input.
+    ///
+    /// - Parameter input: The input to the layer.
+    /// - Returns: The output.
+    @differentiable
+    public func callAsFunction(_ input: Tensor<Scalar>) -> Tensor<Scalar> {
+        var hidden: Tensor<Scalar>
+        if batched {
+            hidden = matmul(input.expandingShape(at: 1), weight).squeezingShape(at: 1)
+        } else {
+            hidden = matmul(input, weight)
+        }
+        if useBias {
+            hidden = hidden + bias
+        }
+        return activation(hidden)
+    }
+}
+
+public extension Linear {
+    init(
+        inputSize: Int,
+        outputSize: Int,
+        activation: @escaping Activation = identity,
+        weightInitializer: ParameterInitializer<Scalar> = glorotUniform(),
+        biasInitializer: ParameterInitializer<Scalar> = zeros(),
+        useBias: Bool = true
+    ) {
+	let bias = useBias ? biasInitializer([outputSize]) : Tensor<Scalar>(repeating: Scalar(0), shape: [0])
+	self.init(
+	    weight: weightInitializer([inputSize, outputSize]),
+	    bias: bias,
+	    activation: activation,
+	    useBias: useBias)
+    }
+}
+
 // copied from https://github.com/tensorflow/swift-models/blob/master/Transformer/Model.swift
 @differentiable(wrt: dotProducts, vjp: _vjpCausallyMasked)
 func causallyMasked(_ dotProducts: Tensor<Float>, enable: Bool = false) -> Tensor<Float> {
@@ -15,15 +83,14 @@ func causallyMasked(_ dotProducts: Tensor<Float>, enable: Bool = false) -> Tenso
         ones,
         numLower: Tensor(Int32(-1)),
         numUpper: Tensor(Int32(queryTimeSteps - keyTimeSteps)))
-    return dotProducts * mask - Float.infinity * (1 - mask)
-    // return dotProducts * mask - 1e10 * (1 - mask)
+    return dotProducts * mask - 1e10 * (1 - mask)
 }
 
 // causal mask is intentionally invisible to differentiation
 func _vjpCausallyMasked(_ dotProducts: Tensor<Float>, enable: Bool)
     -> (Tensor<Float>, (Tensor<Float>) -> Tensor<Float>) {
     // bug in copied code: must pass enable to diff call
-    return (causallyMasked(dotProducts, enable:enable), identity)
+    return (causallyMasked(dotProducts, enable: enable), identity)
 }
 
 struct SelfAttentionWide: Layer {
@@ -149,63 +216,3 @@ extension Array: Module where Element: Layer, Element.Input == Element.Output {
 }
 extension Array: Layer where Element: Layer, Element.Input == Element.Output {}
 
-
-struct GTransformer: Module {
-    typealias Input = Tensor<Int32>
-    typealias Output = Tensor<Float>
-
-    @noDerivative let emb: Int
-    @noDerivative let heads: Int
-    @noDerivative let depth: Int
-    @noDerivative let seqLength: Int
-    @noDerivative let numTokens: Int
-    @noDerivative let wide: Bool
-
-    var tokenEmbedding: Embedding<Float>
-    var posEmbedding: Embedding<Float>
-    var toProbs: Dense<Float>
-    var tblocks: Array<TransformerBlock>
-
-    init(emb: Int, heads: Int, depth: Int, seqLength: Int, numTokens: Int, wide: Bool = false) {
-	self.emb = emb
-	self.heads = heads
-	self.depth = depth
-	self.seqLength = seqLength
-	self.numTokens = numTokens
-	self.wide = wide
-
-	tokenEmbedding = Embedding<Float>(vocabularySize: numTokens, embeddingSize: emb)
-	posEmbedding = Embedding<Float>(vocabularySize: seqLength, embeddingSize: emb)
-
-	tblocks = (1 ... depth).map { d in
-	    TransformerBlock(emb:emb, heads:heads, mask:true, seqLength:seqLength, wide:wide)
-	}
-
-	toProbs = Dense<Float>(inputSize: emb, outputSize: numTokens)
-    }
-
-    @differentiable(wrt: self)
-    func callAsFunction(_ x: Input) -> Output {
-	let tokens = tokenEmbedding(x)
-	// print("tokens.shape: \(tokens.shape)")
-	let (b, t, e) = (tokens.shape[0], tokens.shape[1], tokens.shape[2])
-
-	let p = Tensor<Int32>(rangeFrom: Int32(0), to: Int32(t), stride: Int32(1))
-	let positions = posEmbedding(p).expandingShape(at:0).broadcasted(to: [b, t, e])
-	// print("positions.shape: \(positions.shape)")
-
-	let x0 = tokens + positions
-	let x1 = tblocks(x0)
-
-	// in the pytorch implementation, we return a 3D tensor
-	// in s4tf, we need to reshape that back to a 2D one
-	// let x2 = toProbs(x1.reshaped(to: [b*t, e])).reshaped(to: [b, t, numTokens])
-
-	let x2 = toProbs(x1.reshaped(to: [b*t, e]))
-
-	// we're using softmaxCrossEntropy as the loss function, no need for logSoftmax here
-	// return logSoftmax(x2)
-
-	return x2
-    }
-}
