@@ -1,6 +1,30 @@
 import TensorFlow
 import Foundation
-import TensorFlow
+import Python
+
+
+// copied from https://github.com/tensorflow/swift-models/blob/master/Transformer/Model.swift
+@differentiable(wrt: dotProducts, vjp: _vjpCausallyMasked)
+func causallyMasked(_ dotProducts: Tensor<Float>, enable: Bool = false) -> Tensor<Float> {
+    if !enable {
+        return dotProducts
+    }
+    let (queryTimeSteps, keyTimeSteps) = (dotProducts.shape[1], dotProducts.shape[2])
+    let ones = Tensor<Float>(ones: [1, queryTimeSteps, keyTimeSteps])
+    let mask = Raw.matrixBandPart(
+        ones,
+        numLower: Tensor(Int32(-1)),
+        numUpper: Tensor(Int32(queryTimeSteps - keyTimeSteps)))
+    return dotProducts * mask - Float.infinity * (1 - mask)
+    // return dotProducts * mask - 1e10 * (1 - mask)
+}
+
+// causal mask is intentionally invisible to differentiation
+func _vjpCausallyMasked(_ dotProducts: Tensor<Float>, enable: Bool)
+    -> (Tensor<Float>, (Tensor<Float>) -> Tensor<Float>) {
+    // bug in copied code: must pass enable to diff call
+    return (causallyMasked(dotProducts, enable:enable), identity)
+}
 
 struct SelfAttentionWide: Layer {
     typealias Input = Tensor<Float>
@@ -26,9 +50,7 @@ struct SelfAttentionWide: Layer {
 
     @differentiable
     func callAsFunction(_ x: Input) -> Output {
-	let b = x.shape[0]
-	let t = x.shape[1]
-	let e = x.shape[2]
+	let (b, t, e) = (x.shape[0], x.shape[1], x.shape[2])
 	let h = self.heads
 
 	precondition(e == self.emb, "Input embedding \(e) should match layer embedding dim \(self.emb)")
@@ -51,9 +73,9 @@ struct SelfAttentionWide: Layer {
 
 	precondition(dot.shape == [b*h, t, t])
 
-	// todo implement masking
+	let maskedDot = causallyMasked(dot, enable:mask)
 
-	let out = matmul(dot, values)
+	let out = matmul(maskedDot, values)
 	    .reshaped(to: [b, h, t, e])
 	    .transposed(withPermutations: [0, 2, 1, 3])
 	    .reshaped(to: [b, t, h * e])
@@ -156,7 +178,7 @@ struct GTransformer: Module {
 	posEmbedding = Embedding<Float>(vocabularySize: seqLength, embeddingSize: emb)
 
 	tblocks = (1 ... depth).map { d in
-	    TransformerBlock(emb:emb, heads:heads, mask:false, seqLength:seqLength, wide:wide)
+	    TransformerBlock(emb:emb, heads:heads, mask:true, seqLength:seqLength, wide:wide)
 	}
 
 	toProbs = Dense<Float>(inputSize: emb, outputSize: numTokens)
@@ -166,9 +188,7 @@ struct GTransformer: Module {
     func callAsFunction(_ x: Input) -> Output {
 	let tokens = tokenEmbedding(x)
 	// print("tokens.shape: \(tokens.shape)")
-	let b = tokens.shape[0]
-	let t = tokens.shape[1]
-	let e = tokens.shape[2]
+	let (b, t, e) = (tokens.shape[0], tokens.shape[1], tokens.shape[2])
 
 	let p = Tensor<Int32>(rangeFrom: Int32(0), to: Int32(t), stride: Int32(1))
 	let positions = posEmbedding(p).expandingShape(at:0).broadcasted(to: [b, t, e])
@@ -176,12 +196,16 @@ struct GTransformer: Module {
 
 	let x0 = tokens + positions
 	let x1 = tblocks(x0)
+
 	// in the pytorch implementation, we return a 3D tensor
 	// in s4tf, we need to reshape that back to a 2D one
-	// let x2 = toProbs(x1.reshaped(to: [b*t, e]))//.reshaped(to: [b, t, numTokens])
+	// let x2 = toProbs(x1.reshaped(to: [b*t, e])).reshaped(to: [b, t, numTokens])
+
 	let x2 = toProbs(x1.reshaped(to: [b*t, e]))
 
-	return x2
+	// we're using softmaxCrossEntropy as the loss function, no need for logSoftmax here
 	// return logSoftmax(x2)
+
+	return x2
     }
 }

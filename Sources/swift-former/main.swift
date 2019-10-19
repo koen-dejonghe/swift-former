@@ -2,6 +2,8 @@ print("Hello, world!")
 
 import TensorFlow
 import Python
+let np = Python.import("numpy")
+let gzip = Python.import("gzip")
 
 func testSaw() {
     let emb = 4
@@ -113,8 +115,6 @@ func testGT()
 }
 // testGT()
 
-let np = Python.import("numpy")
-let gzip = Python.import("gzip")
 func enwik8(path: String, 
 	   nTrain: Int32 = Int32(90e6), 
 	   nValid: Int32 = Int32(5e6), 
@@ -190,7 +190,8 @@ func testLoad() {
     let depth = 12
     let context = 256
     let numTokens = 256
-    let lr: Float = 1e-4
+    // let lr: Float = 1e-4
+    let lr: Float = 1e-3
     let numBatches = 1000000
 
     let data = enwik8(path:"data/enwik8.gz")
@@ -214,6 +215,7 @@ func testLoad() {
             let range = Int(starts[i].scalarized()) ..< Int(starts[i].scalarized()) + context
             return dataTrain[range]
         }
+
         let seqTarget: Array<Tensor<UInt8>> = (0 ..< bs).map { i in
             let range = Int(starts[i].scalarized()) + 1 ..< Int(starts[i].scalarized()) + context + 1
             return dataTrain[range]
