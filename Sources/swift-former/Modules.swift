@@ -1,8 +1,27 @@
-import TensorFlow
 import Foundation
+import TensorFlow
 import Python
 
+extension Tensor: TensorProtocol {
+    func transpose(_ d1: Int, _ d2: Int) -> Tensor {
+	var r = Array<Int>(0 ..< self.rank)
+	r[d1] = d2
+	r[d2] = d1
+        return self.transposed(withPermutations: r)
+    }
+}
 
+// copied from fast ai
+extension Array: Module where Element: Layer, Element.Input == Element.Output {
+    public typealias Input = Element.Input
+    public typealias Output = Element.Output
+
+    @differentiable(wrt: (self, input))
+    public func callAsFunction(_ input: Input) -> Output {
+          return self.differentiableReduce(input) { $1($0) }
+    }
+}
+extension Array: Layer where Element: Layer, Element.Input == Element.Output {}
 
 public struct Linear<Scalar: TensorFlowFloatingPoint>: Layer {
     /// The weight matrix.
@@ -72,6 +91,7 @@ public extension Linear {
 }
 
 // copied from https://github.com/tensorflow/swift-models/blob/master/Transformer/Model.swift
+// mask matrix elements above diagonal with large negative number
 @differentiable(wrt: dotProducts, vjp: _vjpCausallyMasked)
 func causallyMasked(_ dotProducts: Tensor<Float>, enable: Bool = false) -> Tensor<Float> {
     if !enable {
@@ -83,6 +103,7 @@ func causallyMasked(_ dotProducts: Tensor<Float>, enable: Bool = false) -> Tenso
         ones,
         numLower: Tensor(Int32(-1)),
         numUpper: Tensor(Int32(queryTimeSteps - keyTimeSteps)))
+    // return dotProducts * mask - .infinity * (1 - mask)
     return dotProducts * mask - 1e10 * (1 - mask)
 }
 
@@ -93,7 +114,11 @@ func _vjpCausallyMasked(_ dotProducts: Tensor<Float>, enable: Bool)
     return (causallyMasked(dotProducts, enable: enable), identity)
 }
 
-struct SelfAttentionWide: Layer {
+
+protocol AttentionProtocol: Layer {
+}
+
+struct SelfAttentionWide: AttentionProtocol {
     typealias Input = Tensor<Float>
     typealias Output = Tensor<Float>
 
@@ -124,28 +149,106 @@ struct SelfAttentionWide: Layer {
 
 	let keys = toKeys(x)
 	    .reshaped(to: [b, t, h, e])
-	    .transposed(withPermutations: [0, 2, 1, 3])
+	    .transpose(1, 2)
 	    .reshaped(to: [b * h, t, e])
-	    .transposed(withPermutations: [0, 2, 1]) / Float(pow(Double(e), 0.25))
+	    .transpose(1, 2)
+	    / Float(pow(Double(e), 0.25))
+
 	let queries = toQueries(x)
 	    .reshaped(to: [b, t, h, e])
-	    .transposed(withPermutations: [0, 2, 1, 3])
-	    .reshaped(to: [b * h, t, e]) / Float(pow(Double(e), 0.25))
+	    .transpose(1, 2)
+	    .reshaped(to: [b * h, t, e]) 
+	    / Float(pow(Double(e), 0.25))
+
 	let values = toValues(x)
 	    .reshaped(to: [b, t, h, e])
-	    .transposed(withPermutations: [0, 2, 1, 3])
+	    .transpose(1, 2)
 	    .reshaped(to: [b * h, t, e])
 
-	let dot = softmax(matmul(queries, keys), alongAxis: 2)
+	let dot = matmul(queries, keys)
 
 	precondition(dot.shape == [b*h, t, t])
 
 	let maskedDot = causallyMasked(dot, enable:mask)
 
-	let out = matmul(maskedDot, values)
+	let smDot = softmax(maskedDot, alongAxis: 2)
+
+	let out = matmul(smDot, values)
 	    .reshaped(to: [b, h, t, e])
-	    .transposed(withPermutations: [0, 2, 1, 3])
+	    .transpose(1, 2)
 	    .reshaped(to: [b, t, h * e])
+
+	return unifyHeads(out)
+    }
+}
+
+
+struct SelfAttentionNarrow: Layer {
+    typealias Input = Tensor<Float>
+    typealias Output = Tensor<Float>
+
+    @noDerivative let emb: Int
+    @noDerivative let heads: Int
+    @noDerivative let mask: Bool
+    var toKeys: Linear<Float>
+    var toQueries: Linear<Float>
+    var toValues: Linear<Float>
+    var unifyHeads: Dense<Float>
+
+    init(emb: Int, heads: Int, mask: Bool) {
+	precondition(
+	  emb % heads == 0, 
+	  "Embedding dimension \(emb) should be divisible by nr. of heads \(heads)")
+	self.emb = emb
+	self.heads = heads
+	self.mask = mask
+
+	let s = emb / heads
+
+	toKeys = Linear<Float>(inputSize: s, outputSize: s, useBias: false)
+	toQueries = Linear<Float>(inputSize: s, outputSize: s, useBias: false)
+	toValues = Linear<Float>(inputSize: s, outputSize: s, useBias: false)
+
+        unifyHeads = Dense<Float>(inputSize: heads * s, outputSize: emb)
+    }
+
+    @differentiable
+    func callAsFunction(_ x: Input) -> Output {
+
+	let (b, t, e) = (x.shape[0], x.shape[1], x.shape[2])
+	let h = heads
+	precondition(e == emb, "Input embedding \(e) should match layer embedding dim \(emb)")
+
+	let s = e / h
+	let x0 = x.reshaped(to: [b, t, h, s])
+
+	let keys = toKeys(x0)
+	let queries = toQueries(x0)
+	let values = toValues(x0)
+
+	precondition(keys.shape == [b, t, h, s])
+	precondition(queries.shape == [b, t, h, s])
+	precondition(values.shape == [b, t, h, s])
+
+	let keys1 = keys.transpose(2, 1).reshaped(to: [b * h, t, s])
+	let queries1 = queries.transpose(2, 1).reshaped(to: [b * h, t, s])
+	let values1 = values.transpose(2, 1).reshaped(to: [b * h, t, s])
+
+	let keys2 = keys1 / Float(pow(Double(e), 0.25))
+	let queries2 = queries1 / Float(pow(Double(e), 0.25))
+
+	let dot = matmul(queries2, keys2.transpose(2, 1)) 
+
+	precondition(dot.shape == [b*h, t, t])
+
+	let maskedDot = causallyMasked(dot, enable:mask)
+
+	let smDot = softmax(maskedDot, alongAxis: 2)
+
+	let out = matmul(smDot, values1)
+	    .reshaped(to: [b, h, t, s])
+	    .transpose(2, 1)
+	    .reshaped(to: [b, t, h * s])
 
 	return unifyHeads(out)
     }
@@ -163,7 +266,10 @@ struct TransformerBlock: Layer {
     @noDerivative let dropout: Double
     @noDerivative let wide: Bool
 
-    var attention: SelfAttentionWide
+    // todo generalize this
+    var attentionWide: SelfAttentionWide
+    var attentionNarrow: SelfAttentionNarrow
+
     var norm1: LayerNorm<Float>
     var norm2: LayerNorm<Float>
     var ff: Sequential<Dense<Float>,Dense<Float>>
@@ -179,7 +285,9 @@ struct TransformerBlock: Layer {
 	self.dropout = dropout
 	self.wide = wide
 
-	attention = SelfAttentionWide(emb: emb, heads: heads, mask: mask)
+	attentionWide = SelfAttentionWide(emb: emb, heads: heads, mask: mask)
+	attentionNarrow = SelfAttentionNarrow(emb: emb, heads: heads, mask: mask) 
+
 	norm1 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon: Tensor(1e-5))
 	norm2 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon: Tensor(1e-5))
 
@@ -193,7 +301,9 @@ struct TransformerBlock: Layer {
 
     @differentiable
     func callAsFunction(_ x: Input) -> Output {
-	let x0 = attention(x)
+	// let x0 = self.wide ? attentionWide(x) : attentionNarrow(x)
+	let x0 = attentionNarrow(x)
+	// let x0 = attentionWide(x)
 	let x1 = norm1(x0 + x)
 	let x2 = drpt(x1)
 	let x3 = ff(x2)
@@ -203,16 +313,4 @@ struct TransformerBlock: Layer {
 	return x5
     }
 }
-
-// copied from fast ai
-extension Array: Module where Element: Layer, Element.Input == Element.Output {
-    public typealias Input = Element.Input
-    public typealias Output = Element.Output
-
-    @differentiable(wrt: (self, input))
-    public func callAsFunction(_ input: Input) -> Output {
-          return self.differentiableReduce(input) { $1($0) }
-    }
-}
-extension Array: Layer where Element: Layer, Element.Input == Element.Output {}
 

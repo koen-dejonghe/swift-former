@@ -190,8 +190,8 @@ func testLoad() {
     let depth = 12
     let context = 256
     let numTokens = 256
-    // let lr: Float = 1e-4
-    let lr: Float = 1e-3
+    let lr: Float = 1e-4
+    // let lr: Float = 1e-3
     let numBatches = 1000000
 
     let data = enwik8(path:"data/enwik8.gz")
