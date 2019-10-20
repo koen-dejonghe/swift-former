@@ -2,7 +2,7 @@ import Foundation
 import TensorFlow
 import Python
 
-extension Tensor: TensorProtocol {
+extension Tensor {
     func transpose(_ d1: Int, _ d2: Int) -> Tensor {
 	var r = Array<Int>(0 ..< self.rank)
 	r[d1] = d2
@@ -24,18 +24,12 @@ extension Array: Module where Element: Layer, Element.Input == Element.Output {
 extension Array: Layer where Element: Layer, Element.Input == Element.Output {}
 
 public struct Linear<Scalar: TensorFlowFloatingPoint>: Layer {
-    /// The weight matrix.
     public var weight: Tensor<Scalar>
-    /// The bias vector.
     public var bias: Tensor<Scalar>
-    /// The element-wise activation function.
     @noDerivative public let activation: Activation
-    /// Indicates whether this is a batched dense layer.
     @noDerivative internal let batched: Bool
-    /// Indicates whether to use bias or not.
     @noDerivative public let useBias: Bool
 
-    /// The element-wise activation function type.
     public typealias Activation = @differentiable (Tensor<Scalar>) -> Tensor<Scalar>
 
     public init(
@@ -53,10 +47,6 @@ public struct Linear<Scalar: TensorFlowFloatingPoint>: Layer {
         self.useBias = useBias
     }
 
-    /// Returns the output obtained from applying the layer to the given input.
-    ///
-    /// - Parameter input: The input to the layer.
-    /// - Returns: The output.
     @differentiable
     public func callAsFunction(_ input: Tensor<Scalar>) -> Tensor<Scalar> {
         var hidden: Tensor<Scalar>
@@ -110,21 +100,21 @@ func causallyMasked(_ dotProducts: Tensor<Float>, enable: Bool = false) -> Tenso
 // causal mask is intentionally invisible to differentiation
 func _vjpCausallyMasked(_ dotProducts: Tensor<Float>, enable: Bool)
     -> (Tensor<Float>, (Tensor<Float>) -> Tensor<Float>) {
-    // bug in copied code: must pass enable to diff call
     return (causallyMasked(dotProducts, enable: enable), identity)
 }
 
-
-protocol AttentionProtocol: Layer {
+protocol Attention: Layer {
+    init(emb: Int, heads: Int, mask: Bool)
 }
 
-struct SelfAttentionWide: AttentionProtocol {
+struct SelfAttentionWide: Attention {
     typealias Input = Tensor<Float>
     typealias Output = Tensor<Float>
 
     @noDerivative let emb: Int
     @noDerivative let heads: Int
     @noDerivative let mask: Bool
+    @noDerivative let scale: Float
     var toKeys: Linear<Float>
     var toQueries: Linear<Float>
     var toValues: Linear<Float>
@@ -134,6 +124,8 @@ struct SelfAttentionWide: AttentionProtocol {
 	self.emb = emb
 	self.heads = heads
 	self.mask = mask
+	self.scale = Float(pow(Double(emb), 0.25))
+
 	toKeys = Linear<Float>(inputSize: emb, outputSize: emb * heads, useBias: false)
 	toQueries = Linear<Float>(inputSize: emb, outputSize: emb * heads, useBias: false)
 	toValues = Linear<Float>(inputSize: emb, outputSize: emb * heads, useBias: false)
@@ -152,13 +144,13 @@ struct SelfAttentionWide: AttentionProtocol {
 	    .transpose(1, 2)
 	    .reshaped(to: [b * h, t, e])
 	    .transpose(1, 2)
-	    / Float(pow(Double(e), 0.25))
+	    / scale
 
 	let queries = toQueries(x)
 	    .reshaped(to: [b, t, h, e])
 	    .transpose(1, 2)
 	    .reshaped(to: [b * h, t, e]) 
-	    / Float(pow(Double(e), 0.25))
+	    / scale
 
 	let values = toValues(x)
 	    .reshaped(to: [b, t, h, e])
@@ -166,10 +158,9 @@ struct SelfAttentionWide: AttentionProtocol {
 	    .reshaped(to: [b * h, t, e])
 
 	let dot = matmul(queries, keys)
-
 	precondition(dot.shape == [b*h, t, t])
 
-	let maskedDot = causallyMasked(dot, enable:mask)
+	let maskedDot = causallyMasked(dot, enable: mask)
 
 	let smDot = softmax(maskedDot, alongAxis: 2)
 
@@ -183,13 +174,15 @@ struct SelfAttentionWide: AttentionProtocol {
 }
 
 
-struct SelfAttentionNarrow: Layer {
+struct SelfAttentionNarrow: Attention {
     typealias Input = Tensor<Float>
     typealias Output = Tensor<Float>
 
     @noDerivative let emb: Int
     @noDerivative let heads: Int
     @noDerivative let mask: Bool
+    @noDerivative let scale: Float
+
     var toKeys: Linear<Float>
     var toQueries: Linear<Float>
     var toValues: Linear<Float>
@@ -202,6 +195,7 @@ struct SelfAttentionNarrow: Layer {
 	self.emb = emb
 	self.heads = heads
 	self.mask = mask
+	self.scale = Float(pow(Double(emb), 0.25))
 
 	let s = emb / heads
 
@@ -220,32 +214,25 @@ struct SelfAttentionNarrow: Layer {
 	precondition(e == emb, "Input embedding \(e) should match layer embedding dim \(emb)")
 
 	let s = e / h
-	let x0 = x.reshaped(to: [b, t, h, s])
+	let xr = x.reshaped(to: [b, t, h, s])
 
-	let keys = toKeys(x0)
-	let queries = toQueries(x0)
-	let values = toValues(x0)
+	let keys = toKeys(xr)
+	    .transpose(2, 1)
+	    .reshaped(to: [b * h, t, s])
+	    / scale
+	let queries = toQueries(xr)
+	    .transpose(2, 1)
+	    .reshaped(to: [b * h, t, s])
+	    / scale
+	let values = toValues(xr)
+	    .transpose(2, 1)
+	    .reshaped(to: [b * h, t, s])
 
-	precondition(keys.shape == [b, t, h, s])
-	precondition(queries.shape == [b, t, h, s])
-	precondition(values.shape == [b, t, h, s])
+	var dot = matmul(queries, keys.transpose(2, 1)) 
+	dot = causallyMasked(dot, enable: mask)
+	dot = softmax(dot, alongAxis: 2)
 
-	let keys1 = keys.transpose(2, 1).reshaped(to: [b * h, t, s])
-	let queries1 = queries.transpose(2, 1).reshaped(to: [b * h, t, s])
-	let values1 = values.transpose(2, 1).reshaped(to: [b * h, t, s])
-
-	let keys2 = keys1 / Float(pow(Double(e), 0.25))
-	let queries2 = queries1 / Float(pow(Double(e), 0.25))
-
-	let dot = matmul(queries2, keys2.transpose(2, 1)) 
-
-	precondition(dot.shape == [b*h, t, t])
-
-	let maskedDot = causallyMasked(dot, enable:mask)
-
-	let smDot = softmax(maskedDot, alongAxis: 2)
-
-	let out = matmul(smDot, values1)
+	let out = matmul(dot, values)
 	    .reshaped(to: [b, h, t, s])
 	    .transpose(2, 1)
 	    .reshaped(to: [b, t, h * s])
@@ -267,13 +254,14 @@ struct TransformerBlock: Layer {
     @noDerivative let wide: Bool
 
     // todo generalize this
+    var attention: Layer
     var attentionWide: SelfAttentionWide
     var attentionNarrow: SelfAttentionNarrow
 
     var norm1: LayerNorm<Float>
     var norm2: LayerNorm<Float>
     var ff: Sequential<Dense<Float>,Dense<Float>>
-    var drpt: Dropout<Float>
+    @noDerivative let drpt: Dropout<Float>
 
     init(emb: Int, heads: Int, mask: Bool, seqLength: Int, ffHiddenMult: Int = 4, dropout: Double = 0.0, wide: Bool = true) {
 

@@ -11,7 +11,7 @@ func testSaw() {
     let mask = false
     let bs = 4
 
-    var saw = SelfAttentionWide(emb: emb, heads: heads, mask: mask)
+    let saw = SelfAttentionWide(emb: emb, heads: heads, mask: mask)
     // let x = Tensor<Float>(randomNormal: [10, 3, 4])
     let x = Tensor<Float>(linearSpaceFrom: 0.0, to: 0.999, count: bs*heads*emb)
 	     .reshaped(to: [bs, heads, emb])
@@ -69,7 +69,7 @@ func testTBlocks() {
     let emb = 128
     let depth = 12
     let context = 256
-    let numTokens = 256
+    // let numTokens = 256
 
     let tblocks:Array<TransformerBlock> = (1 ... depth).map { d in
 	print("tblocks depth: \(d)")
@@ -224,7 +224,7 @@ func testLoad() {
         let source = Tensor<Int32>(Tensor(concatenating: seqSource)).reshaped(to:[bs, context])
         let target = Tensor<Int32>(Tensor(concatenating: seqTarget)).reshaped(to:[bs*context])
 
-        let (loss, grad) = model.valueWithGradient { generator -> Tensor<Float> in
+        let (_, grad) = model.valueWithGradient { generator -> Tensor<Float> in
             let output = generator(source)
 	    // print(output)
 	    let loss = softmaxCrossEntropy(logits: output, //.reshaped(to: [bs*context, -1]), 
@@ -233,7 +233,7 @@ func testLoad() {
 	    return loss
         }
 
-	optimizer.update(&model.allDifferentiableVariables, along: grad)
+	optimizer.update(&model, along: grad)
 
     }
 }
