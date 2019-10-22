@@ -173,7 +173,7 @@ struct SelfAttentionWide: Attention {
     }
 }
 
-
+/*
 struct SelfAttentionNarrow: Attention {
     typealias Input = Tensor<Float>
     typealias Output = Tensor<Float>
@@ -298,6 +298,150 @@ struct TransformerBlock: Layer {
 	let x5 = drpt(x4)
 
 	return x5
+    }
+}
+*/
+
+struct SelfAttention: Layer {
+    typealias Input = Tensor<Float>
+    typealias Output = Tensor<Float>
+
+    @noDerivative let emb: Int
+    @noDerivative let heads: Int
+    @noDerivative let mask: Bool
+    @noDerivative let wide: Bool
+    @noDerivative let scale: Float
+    var toKeys: Linear<Float>
+    var toQueries: Linear<Float>
+    var toValues: Linear<Float>
+    var unifyHeads: Dense<Float>
+
+    init(emb: Int, heads: Int, mask: Bool, wide: Bool) {
+      self.emb = emb
+      self.heads = heads
+      self.mask = mask
+      self.wide = wide
+      self.scale = Float(pow(Double(emb), 0.25))
+
+      let (isz, osz) = wide ? (emb, emb * heads) : (emb / heads, emb / heads)
+
+      toKeys = Linear<Float>(inputSize: isz, outputSize: osz, useBias: false)
+      toQueries = Linear<Float>(inputSize: isz, outputSize: osz, useBias: false)
+      toValues = Linear<Float>(inputSize: isz, outputSize: osz, useBias: false)
+
+      unifyHeads = Dense<Float>(inputSize: heads * isz, outputSize: emb)
+    }
+
+    @differentiable
+    func callAsFunction(_ x: Input) -> Output {
+      let (b, t, e) = (x.shape[0], x.shape[1], x.shape[2])
+	    let h = self.heads
+
+      precondition(e == self.emb, "Input embedding \(e) should match layer embedding dim \(self.emb)")
+
+      var keys: Tensor<Float>
+      var queries: Tensor<Float>
+      var values: Tensor<Float>
+      if wide { 
+        keys = toKeys(x)
+          .reshaped(to: [b, t, h, e])
+          .transpose(1, 2)
+          .reshaped(to: [b * h, t, e])
+          .transpose(1, 2)
+        
+        queries = toQueries(x)
+          .reshaped(to: [b, t, h, e])
+          .transpose(1, 2)
+          .reshaped(to: [b * h, t, e]) 
+          / scale          
+
+        values = toValues(x)
+          .reshaped(to: [b, t, h, e])
+          .transpose(1, 2)
+          .reshaped(to: [b * h, t, e])
+      } else {
+        let s = e / h
+        let xr = x.reshaped(to: [b, t, h, s])
+        
+        keys = toKeys(xr)
+          .transpose(1, 2)
+          .reshaped(to: [b * h, t, s])
+          .transpose(1, 2)
+
+        queries = toQueries(xr)
+          .transpose(1, 2)
+          .reshaped(to: [b * h, t, s])
+          / scale
+
+        values = toValues(xr)
+          .transpose(1, 2)
+          .reshaped(to: [b * h, t, s])
+      }
+
+      var dot = matmul(queries, keys)
+      dot = causallyMasked(dot, enable: mask)
+      dot = softmax(dot, alongAxis: 2)
+
+      let s = wide ? e : e / h
+
+      let out = matmul(dot, values)
+          .reshaped(to: [b, h, t, s])
+          .transpose(1, 2)
+          .reshaped(to: [b, t, h * s])
+
+      return unifyHeads(out)
+    }
+}
+
+struct TransformerBlock: Layer {
+    typealias Input = Tensor<Float>
+    typealias Output = Tensor<Float>
+
+    @noDerivative let emb: Int
+    @noDerivative let heads: Int
+    @noDerivative let mask: Bool
+    @noDerivative let seqLength: Int
+    @noDerivative let ffHiddenMult: Int
+    @noDerivative let dropout: Double
+    @noDerivative let wide: Bool
+
+    var attention: SelfAttention
+    var norm1: LayerNorm<Float>
+    var norm2: LayerNorm<Float>
+    var ff: Sequential<Dense<Float>,Dense<Float>>
+    @noDerivative let drpt: Dropout<Float>
+
+    init(emb: Int, heads: Int, mask: Bool, seqLength: Int, ffHiddenMult: Int = 4, dropout: Double = 0.0, wide: Bool = true) {
+      self.emb = emb
+      self.heads = heads
+      self.mask = mask
+      self.seqLength = seqLength
+      self.ffHiddenMult = ffHiddenMult
+      self.dropout = dropout
+      self.wide = wide
+
+      attention = SelfAttention(emb: emb, heads: heads, mask: mask, wide: wide)
+
+      norm1 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon: Tensor(1e-5))
+      norm2 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon: Tensor(1e-5))
+
+      ff = Sequential(
+          Dense<Float>(inputSize: emb, outputSize: ffHiddenMult * emb, activation: relu),
+          Dense<Float>(inputSize: ffHiddenMult * emb, outputSize: emb)
+      )
+
+      drpt = Dropout<Float>(probability: dropout)
+    }
+
+    @differentiable
+    func callAsFunction(_ x: Input) -> Output {
+      let x0 = attention(x)
+      let x1 = norm1(x0 + x)
+      let x2 = drpt(x1)
+      let x3 = ff(x2)
+      let x4 = norm2(x3 + x2)
+      let x5 = drpt(x4)
+      return x5
     }
 }
 
