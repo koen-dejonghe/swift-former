@@ -103,205 +103,6 @@ func _vjpCausallyMasked(_ dotProducts: Tensor<Float>, enable: Bool)
     return (causallyMasked(dotProducts, enable: enable), identity)
 }
 
-protocol Attention: Layer {
-    init(emb: Int, heads: Int, mask: Bool)
-}
-
-struct SelfAttentionWide: Attention {
-    typealias Input = Tensor<Float>
-    typealias Output = Tensor<Float>
-
-    @noDerivative let emb: Int
-    @noDerivative let heads: Int
-    @noDerivative let mask: Bool
-    @noDerivative let scale: Float
-    var toKeys: Linear<Float>
-    var toQueries: Linear<Float>
-    var toValues: Linear<Float>
-    var unifyHeads: Dense<Float>
-
-    init(emb: Int, heads: Int, mask: Bool) {
-	self.emb = emb
-	self.heads = heads
-	self.mask = mask
-	self.scale = Float(pow(Double(emb), 0.25))
-
-	toKeys = Linear<Float>(inputSize: emb, outputSize: emb * heads, useBias: false)
-	toQueries = Linear<Float>(inputSize: emb, outputSize: emb * heads, useBias: false)
-	toValues = Linear<Float>(inputSize: emb, outputSize: emb * heads, useBias: false)
-        unifyHeads = Dense<Float>(inputSize: heads * emb, outputSize: emb)
-    }
-
-    @differentiable
-    func callAsFunction(_ x: Input) -> Output {
-	let (b, t, e) = (x.shape[0], x.shape[1], x.shape[2])
-	let h = self.heads
-
-	precondition(e == self.emb, "Input embedding \(e) should match layer embedding dim \(self.emb)")
-
-	let keys = toKeys(x)
-	    .reshaped(to: [b, t, h, e])
-	    .transpose(1, 2)
-	    .reshaped(to: [b * h, t, e])
-	    .transpose(1, 2)
-	    / scale
-
-	let queries = toQueries(x)
-	    .reshaped(to: [b, t, h, e])
-	    .transpose(1, 2)
-	    .reshaped(to: [b * h, t, e]) 
-	    / scale
-
-	let values = toValues(x)
-	    .reshaped(to: [b, t, h, e])
-	    .transpose(1, 2)
-	    .reshaped(to: [b * h, t, e])
-
-	let dot = matmul(queries, keys)
-	precondition(dot.shape == [b*h, t, t])
-
-	let maskedDot = causallyMasked(dot, enable: mask)
-
-	let smDot = softmax(maskedDot, alongAxis: 2)
-
-	let out = matmul(smDot, values)
-	    .reshaped(to: [b, h, t, e])
-	    .transpose(1, 2)
-	    .reshaped(to: [b, t, h * e])
-
-	return unifyHeads(out)
-    }
-}
-
-/*
-struct SelfAttentionNarrow: Attention {
-    typealias Input = Tensor<Float>
-    typealias Output = Tensor<Float>
-
-    @noDerivative let emb: Int
-    @noDerivative let heads: Int
-    @noDerivative let mask: Bool
-    @noDerivative let scale: Float
-
-    var toKeys: Linear<Float>
-    var toQueries: Linear<Float>
-    var toValues: Linear<Float>
-    var unifyHeads: Dense<Float>
-
-    init(emb: Int, heads: Int, mask: Bool) {
-	precondition(
-	  emb % heads == 0, 
-	  "Embedding dimension \(emb) should be divisible by nr. of heads \(heads)")
-	self.emb = emb
-	self.heads = heads
-	self.mask = mask
-	self.scale = Float(pow(Double(emb), 0.25))
-
-	let s = emb / heads
-
-	toKeys = Linear<Float>(inputSize: s, outputSize: s, useBias: false)
-	toQueries = Linear<Float>(inputSize: s, outputSize: s, useBias: false)
-	toValues = Linear<Float>(inputSize: s, outputSize: s, useBias: false)
-
-        unifyHeads = Dense<Float>(inputSize: heads * s, outputSize: emb)
-    }
-
-    @differentiable
-    func callAsFunction(_ x: Input) -> Output {
-
-	let (b, t, e) = (x.shape[0], x.shape[1], x.shape[2])
-	let h = heads
-	precondition(e == emb, "Input embedding \(e) should match layer embedding dim \(emb)")
-
-	let s = e / h
-	let xr = x.reshaped(to: [b, t, h, s])
-
-	let keys = toKeys(xr)
-	    .transpose(2, 1)
-	    .reshaped(to: [b * h, t, s])
-	    / scale
-	let queries = toQueries(xr)
-	    .transpose(2, 1)
-	    .reshaped(to: [b * h, t, s])
-	    / scale
-	let values = toValues(xr)
-	    .transpose(2, 1)
-	    .reshaped(to: [b * h, t, s])
-
-	var dot = matmul(queries, keys.transpose(2, 1)) 
-	dot = causallyMasked(dot, enable: mask)
-	dot = softmax(dot, alongAxis: 2)
-
-	let out = matmul(dot, values)
-	    .reshaped(to: [b, h, t, s])
-	    .transpose(2, 1)
-	    .reshaped(to: [b, t, h * s])
-
-	return unifyHeads(out)
-    }
-}
-
-struct TransformerBlock: Layer {
-    typealias Input = Tensor<Float>
-    typealias Output = Tensor<Float>
-
-    @noDerivative let emb: Int
-    @noDerivative let heads: Int
-    @noDerivative let mask: Bool
-    @noDerivative let seqLength: Int
-    @noDerivative let ffHiddenMult: Int
-    @noDerivative let dropout: Double
-    @noDerivative let wide: Bool
-
-    // todo generalize this
-    var attentionWide: SelfAttentionWide
-    var attentionNarrow: SelfAttentionNarrow
-
-    var norm1: LayerNorm<Float>
-    var norm2: LayerNorm<Float>
-    var ff: Sequential<Dense<Float>,Dense<Float>>
-    @noDerivative let drpt: Dropout<Float>
-
-    init(emb: Int, heads: Int, mask: Bool, seqLength: Int, ffHiddenMult: Int = 4, dropout: Double = 0.0, wide: Bool = true) {
-
-	self.emb = emb
-	self.heads = heads
-	self.mask = mask
-	self.seqLength = seqLength
-	self.ffHiddenMult = ffHiddenMult
-	self.dropout = dropout
-	self.wide = wide
-
-	attentionWide = SelfAttentionWide(emb: emb, heads: heads, mask: mask)
-	attentionNarrow = SelfAttentionNarrow(emb: emb, heads: heads, mask: mask) 
-
-	norm1 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon: Tensor(1e-5))
-	norm2 = LayerNorm<Float>(featureCount: emb, axis: -1, epsilon: Tensor(1e-5))
-
-	ff = Sequential(
-	    Dense<Float>(inputSize: emb, outputSize: ffHiddenMult * emb, activation: relu),
-	    Dense<Float>(inputSize: ffHiddenMult * emb, outputSize: emb)
-	)
-
-	drpt = Dropout<Float>(probability: dropout)
-    }
-
-    @differentiable
-    func callAsFunction(_ x: Input) -> Output {
-	// let x0 = self.wide ? attentionWide(x) : attentionNarrow(x)
-	let x0 = attentionNarrow(x)
-	// let x0 = attentionWide(x)
-	let x1 = norm1(x0 + x)
-	let x2 = drpt(x1)
-	let x3 = ff(x2)
-	let x4 = norm2(x3 + x2)
-	let x5 = drpt(x4)
-
-	return x5
-    }
-}
-*/
-
 struct SelfAttention: Layer {
     typealias Input = Tensor<Float>
     typealias Output = Tensor<Float>
@@ -335,7 +136,7 @@ struct SelfAttention: Layer {
     @differentiable
     func callAsFunction(_ x: Input) -> Output {
       let (b, t, e) = (x.shape[0], x.shape[1], x.shape[2])
-	    let h = self.heads
+      let h = self.heads
 
       precondition(e == self.emb, "Input embedding \(e) should match layer embedding dim \(self.emb)")
 
@@ -348,12 +149,13 @@ struct SelfAttention: Layer {
           .transpose(1, 2)
           .reshaped(to: [b * h, t, e])
           .transpose(1, 2)
+          / scale
         
         queries = toQueries(x)
           .reshaped(to: [b, t, h, e])
           .transpose(1, 2)
           .reshaped(to: [b * h, t, e]) 
-          / scale          
+          / scale
 
         values = toValues(x)
           .reshaped(to: [b, t, h, e])
@@ -367,6 +169,7 @@ struct SelfAttention: Layer {
           .transpose(1, 2)
           .reshaped(to: [b * h, t, s])
           .transpose(1, 2)
+          / scale
 
         queries = toQueries(xr)
           .transpose(1, 2)

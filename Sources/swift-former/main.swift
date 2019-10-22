@@ -11,7 +11,7 @@ func testSaw() {
     let mask = false
     let bs = 4
 
-    let saw = SelfAttentionWide(emb: emb, heads: heads, mask: mask)
+    let saw = SelfAttention(emb: emb, heads: heads, mask: mask, wide: true)
     // let x = Tensor<Float>(randomNormal: [10, 3, 4])
     let x = Tensor<Float>(linearSpaceFrom: 0.0, to: 0.999, count: bs*heads*emb)
 	     .reshaped(to: [bs, heads, emb])
