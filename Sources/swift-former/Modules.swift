@@ -254,7 +254,6 @@ struct TransformerBlock: Layer {
     @noDerivative let wide: Bool
 
     // todo generalize this
-    var attention: Layer
     var attentionWide: SelfAttentionWide
     var attentionNarrow: SelfAttentionNarrow
 
