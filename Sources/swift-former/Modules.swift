@@ -2,6 +2,7 @@ import Foundation
 import TensorFlow
 import Python
 
+
 extension Tensor {
     func transpose(_ d1: Int, _ d2: Int) -> Tensor {
 	var r = Array<Int>(0 ..< self.rank)

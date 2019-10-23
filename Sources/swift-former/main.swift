@@ -193,9 +193,12 @@ func testLoad() {
     // let lr: Float = 1e-4
     let lr: Float = 1e-3
     let numBatches = 1000000
+    let testEvery = 1500
+    let testSubset = 100000
 
     let data = enwik8(path:"data/enwik8.gz")
     let dataTrain = data[0]
+    let dataTest = data[1]
     var model = GTransformer(emb:emb, 
 			  heads:heads, 
 			  depth:depth, 
@@ -227,16 +230,28 @@ func testLoad() {
         let (_, grad) = model.valueWithGradient { generator -> Tensor<Float> in
             let output = generator(source)
 	    // print(output)
-	    let loss = softmaxCrossEntropy(logits: output, //.reshaped(to: [bs*context, -1]), 
-				           labels: target)
+	    let loss = softmaxCrossEntropy(logits: output, labels: target)
 	    print("batch \(b): \(loss)")
 	    return loss
         }
 
 	optimizer.update(&model, along: grad)
 
+	if b != 0 && (b % testEvery == 0 || b == numBatches) {
+	    let upto = b == numBatches - 1 ? dataTest.shape[0] : testSubset
+	    let dataSub = dataTest[..<upto]
+
+	    let (bits, tot) = (0.0, 0)
+	    let batch = (0 ..< dataSub.shape[0]).map { current in 
+		let fr = max(0, current - context)
+		let to = current + 1
+
+		let localContext = Tensor<Int32>(dataSub[fr ..< to])
+	    }
+	}
+
     }
 }
-testLoad()
 
+testLoad()
 
