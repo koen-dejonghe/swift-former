@@ -183,6 +183,15 @@ func nllLoss(source: Tensor<Float>, target: Tensor<Int32>) -> Float {
 */
 
 
+
+extension Array {
+    func grouped(size: Int) -> [[Element]] {
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0 ..< Swift.min($0 + size, count)])
+        }
+    }
+}
+
 func testLoad() {
     let bs = 32
     let heads = 8
@@ -193,8 +202,10 @@ func testLoad() {
     // let lr: Float = 1e-4
     let lr: Float = 1e-3
     let numBatches = 1000000
-    let testEvery = 1500
+    // let testEvery = 1500
+    let testEvery = 5
     let testSubset = 100000
+    let testBatchSize = 64
 
     let data = enwik8(path:"data/enwik8.gz")
     let dataTrain = data[0]
@@ -238,19 +249,54 @@ func testLoad() {
 	optimizer.update(&model, along: grad)
 
 	if b != 0 && (b % testEvery == 0 || b == numBatches) {
-	    let upto = b == numBatches - 1 ? dataTest.shape[0] : testSubset
-	    let dataSub = dataTest[..<upto]
-
-	    let (bits, tot) = (0.0, 0)
-	    let batch = (0 ..< dataSub.shape[0]).map { current in 
-		let fr = max(0, current - context)
-		let to = current + 1
-
-		let localContext = Tensor<Int32>(dataSub[fr ..< to])
-	    }
 	}
 
     }
+
+    func bitsPerByte(b: Int) {
+	let upto = b == numBatches - 1 ? dataTest.shape[0] : testSubset
+	let dataSub = dataTest[..<upto]
+	let (bits, tot) = (0.0, 0)
+	Array(0 ..< dataSub.shape[0])
+	    .grouped(size: testBatchSize)
+	    .forEach { chunk in 
+		let batch: Array<Tensor<Int32>> = chunk.map { current in 
+		    let fr = max(0, current - context)
+		    let to = current + 1
+		    var localContext = Tensor<Int32>(dataSub[fr ..< to])
+		    if localContext.shape[0] < context + 1 {
+			let pad = Tensor<Int32>(zeros: [context + 1 - localContext.shape[0]])
+			localContext = Tensor(concatenating: [pad, localContext])
+			assert(localContext.shape[0] == context + 1)
+		    }
+		    return localContext.reshaped(to: [1, -1])
+		}
+
+		let all = Tensor<Int32>(concatenating: batch, alongAxis: 0)
+		// print(all.shape) 64 x 257
+		let source = all.slice(lowerBounds: [0, 0], upperBounds: [all.shape[0], all.shape[1] - 1])
+		let target = all
+		    .slice(lowerBounds: [0, all.shape[1] - 1], upperBounds: [all.shape[0], all.shape[1]])
+		    .squeezingShape()
+		// print(target.shape) // 64
+
+		let output = model(source)
+		    .reshaped(to: [batch.count, -1, source.shape[1]])
+		// print(output.shape) // 64 x 256 x 256
+
+		let r = ..<batch.count
+		let lnProbs = output[r, -1, -1].gathering(atIndices: target)
+		print(lnProbs)
+		// let lnProbs = output.gathering(atIndices: target, alongAxis: 2)
+		print(lnProbs.shape)
+
+		// let lnprobs = output[torch.arange(b, device=d()), -1, target]
+		// print(output.shape)
+
+	    }
+
+    }
+
 }
 
 testLoad()
