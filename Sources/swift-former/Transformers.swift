@@ -55,6 +55,7 @@ struct GTransformer: Module {
 
 	let x2 = toProbs(x1.reshaped(to: [b*t, e]))
 
+
 	// we're using softmaxCrossEntropy as the loss function, no need for logSoftmax here
 	// return logSoftmax(x2)
 
