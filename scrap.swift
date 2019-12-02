@@ -21,6 +21,19 @@ withDevice(.cpu) {
 
     print(r)
     print(r.shape)
-
 }
 
+/*
+withDevice(.cpu) {
+    let output = Tensor<Float>(rangeFrom: 0, to: 8*32*16, stride: 1).reshaped(to: [8, 32, 16])
+    // let target = Tensor<Int32>(rangeFrom: 0, to: 8, stride: 1) % 16
+    let target = Tensor<Int32>(randomUniform: [8], upperBound: Tensor(16))
+
+    let r0: Tensor<Int32> = Raw.range(start: Tensor(0), 
+        limit: Tensor(numericCast(target.shape[0])), 
+        delta: Tensor(1))
+
+    let idx = Tensor(stacking: [r0, Tensor(-1)])
+
+}
+*/
